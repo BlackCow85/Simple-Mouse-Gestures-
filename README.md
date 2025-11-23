@@ -1,10 +1,7 @@
-# Simple Mouse Gestures (간편 마우스 제스처)
+<img width="284" height="285" alt="image" src="https://github.com/user-attachments/assets/f526e627-f69e-4f31-a12d-3f66156c9fbb" /># Simple Mouse Gestures (간편 마우스 제스처)
 
 크롬 브라우저를 위한 가볍고 직관적인 마우스 제스처 확장 프로그램입니다.
 복잡한 설정 없이 필수적인 탐색 기능들을 마우스 오른쪽 드래그만으로 빠르게 실행할 수 있습니다.
-
-![스크린샷 예시](https://via.placeholder.com/600x400?text=Gesture+Screenshot+Here)
-*(여기에 실제 작동 스크린샷이나 GIF를 넣으면 더 좋습니다)*
 
 ## ✨ 주요 기능
 
