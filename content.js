@@ -8,6 +8,10 @@ const MIN_DIST = 10;
 const RECOGNITION_THRESHOLD = 150; // '닫힌 탭 열기' 가로 길이 기준
 const RETURN_TOLERANCE = 100; // 제자리로 돌아왔다고 치는 오차 범위
 
+// 낙서 방지 임계값
+const MAX_X_VARIANCE = 200; 
+const MAX_Y_VARIANCE = 200;
+
 // --- 캔버스 설정 ---
 function createOverlayCanvas() {
   if (document.getElementById('mouse-gesture-canvas')) {
@@ -20,7 +24,11 @@ function createOverlayCanvas() {
   Object.assign(canvas.style, {
     position: 'fixed', top: '0', left: '0',
     width: '100vw', height: '100vh',
-    zIndex: '2147483647', pointerEvents: 'none', display: 'none'
+    // ★ 중요: z-index를 최대로 높여서 모든 광고보다 위에 있게 함
+    zIndex: '2147483647', 
+    display: 'none',
+    // 평소에는 클릭 통과, 그릴 때만 auto로 변경
+    pointerEvents: 'none' 
   });
   (document.documentElement || document.body).appendChild(canvas);
   ctx = canvas.getContext('2d');
@@ -36,17 +44,39 @@ function styleCanvas() {
 if (document.body) createOverlayCanvas();
 else window.addEventListener('DOMContentLoaded', createOverlayCanvas);
 
+// --- 그리기 준비 (Pointer Capture 적용) ---
 function prepareDrawing(e) {
   canvas.width = window.innerWidth; canvas.height = window.innerHeight;
   styleCanvas();
+  
   canvas.style.display = 'block'; 
-  canvas.style.pointerEvents = 'none'; 
+  canvas.style.pointerEvents = 'auto'; // 캔버스가 이벤트를 받도록 활성화
+  
   ctx.beginPath(); ctx.moveTo(e.clientX, e.clientY);
+
+  // ★ 핵심 기술: 마우스 포인터를 캔버스에 강제로 묶어둠 (광고판으로 안 넘어가게)
+  try {
+    if (e.pointerId !== undefined) {
+        canvas.setPointerCapture(e.pointerId);
+    }
+  } catch (err) {
+    console.log("Pointer capture failed:", err);
+  }
 }
 
-function stopDrawing() {
+function stopDrawing(e) {
   if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
-  if (canvas) canvas.style.display = 'none';
+  if (canvas) {
+    // 포인터 묶임 해제
+    try {
+        if (e && e.pointerId !== undefined) {
+            canvas.releasePointerCapture(e.pointerId);
+        }
+    } catch (err) {}
+
+    canvas.style.display = 'none';
+    canvas.style.pointerEvents = 'none'; // 다시 클릭 통과되게 변경
+  }
 }
 
 // --- 동작 수행 함수 ---
@@ -61,87 +91,103 @@ function performAction(action) {
     else if (action === 'bottom') window.scrollTo(0, document.body.scrollHeight);
 }
 
-// --- 마우스 이벤트 ---
-window.addEventListener('mousedown', (e) => {
+// --- ★ 이벤트 리스너 변경 (Mouse -> Pointer) ★ ---
+// Pointer 이벤트는 마우스, 터치, 펜을 모두 포함하며 캡처 기능이 있습니다.
+
+window.addEventListener('pointerdown', (e) => {
+  // 우클릭(button 2)이면서, 메인 좌클릭이 아닐 때
   if (e.button === 2) { 
     isDrawing = true; 
     startX = e.clientX; 
     startY = e.clientY;
     path = [{x: startX, y: startY}]; 
+    
     prepareDrawing(e);
   }
 }, true);
 
-window.addEventListener('mousemove', (e) => {
+window.addEventListener('pointermove', (e) => {
   if (!isDrawing) return;
+  
+  // 캔버스에 그리기
   if (ctx) { ctx.lineTo(e.clientX, e.clientY); ctx.stroke(); }
   
   const lastP = path[path.length - 1];
+  // 거리 계산
   const dist = Math.hypot(e.clientX - lastP.x, e.clientY - lastP.y);
   if (dist > 5) {
       path.push({x: e.clientX, y: e.clientY});
   }
 }, true);
 
-window.addEventListener('mouseup', (e) => {
+window.addEventListener('pointerup', (e) => {
   if (e.button === 2 && isDrawing) {
     isDrawing = false; 
-    stopDrawing();
-
+    
+    // 좌표 계산
     const endX = e.clientX;
     const endY = e.clientY;
-    
     const diffX = endX - startX;
     const diffY = endY - startY;
     const absX = Math.abs(diffX);
     const absY = Math.abs(diffY);
 
-    // 너무 짧으면 무시 (우클릭 메뉴)
+    // 정리 먼저 수행 (캡처 해제 포함)
+    stopDrawing(e);
+
+    // 너무 짧으면 무시 (메뉴 뜨게 놔둠)
     if (path.length < 3 || Math.hypot(diffX, diffY) < MIN_DIST) return;
 
+    // 제스처로 인정되면 메뉴 뜨지 마
     e.preventDefault(); 
     e.stopPropagation();
 
-    // --- ★ 수정된 로직 ★ ---
-    
-    // 경로 분석
+    // --- 경로 및 동작 분석 (이전과 동일) ---
     let maxY = startY; 
     let minY = startY;
-    
-    path.forEach(p => {
+    let totalTraveledX = 0; 
+    let totalTraveledY = 0; 
+
+    for(let i = 0; i < path.length; i++) {
+        const p = path[i];
         if (p.y > maxY) maxY = p.y;
         if (p.y < minY) minY = p.y;
-    });
+        if (i > 0) {
+            totalTraveledX += Math.abs(path[i].x - path[i-1].x);
+            totalTraveledY += Math.abs(path[i].y - path[i-1].y);
+        }
+    }
 
-    // 50px 이상 움직임이 있었는지 체크
     const wentDown = (maxY - startY) > 50; 
     const wentUp = (startY - minY) > 50;   
-    
-    // 시작점 Y와 끝점 Y가 비슷한지 (제자리로 돌아왔는지) 체크
     const returnedY = Math.abs(endY - startY) < RETURN_TOLERANCE; 
+
+    const isVerticalChaos = totalTraveledX > MAX_X_VARIANCE; 
+    const isHorizontalChaos = totalTraveledY > MAX_Y_VARIANCE; 
 
     let action = null;
 
-    // 1. [새로고침 (DU)] : 내려갔다 + 돌아옴
     if (wentDown && returnedY) {
-        action = 'refresh';
+        if (!isVerticalChaos) action = 'refresh';
     }
-    // 2. [탭 닫기 (UD)] : 올라갔다 + 돌아옴 (★ 여기가 추가됨: 돌아와야만 닫기!)
     else if (wentUp && returnedY) {
-        action = 'close';
+        if (!isVerticalChaos) action = 'close';
     }
-    // 3. [닫힌 탭 열기 (UR)] : 올라갔다 + 오른쪽으로 멀리 감(150px 이상)
     else if (wentUp && diffX > RECOGNITION_THRESHOLD) {
+        // 닫힌 탭 열기는 Chaos 체크 면제
         action = 'reopen';
     }
-    // 4. [기본 방향 이동] : 위의 특수 동작이 아니면 직선 이동으로 판단
     else {
-        if (absX > absY) { // 가로 이동
-            if (diffX > 0) action = 'forward'; // →
-            else action = 'back';             // ←
-        } else { // 세로 이동
-            if (diffY > 0) action = 'bottom';  // ↓
-            else action = 'top';               // ↑ (이제 여기서 정상 작동함)
+        if (absX > absY) { 
+            if (!isHorizontalChaos) {
+                if (diffX > 0) action = 'forward'; 
+                else action = 'back';             
+            }
+        } else { 
+            if (!isVerticalChaos) {
+                if (diffY > 0) action = 'bottom';  
+                else action = 'top';               
+            }
         }
     }
 
@@ -149,10 +195,12 @@ window.addEventListener('mouseup', (e) => {
   }
 }, true);
 
+// 우클릭 메뉴 방지
 window.addEventListener('contextmenu', (e) => {
-  if (path.length > 5) { 
+  // 제스처가 감지되었거나 캔버스가 켜져있으면 메뉴 차단
+  if (path.length > 5 || (canvas && canvas.style.display === 'block')) { 
     e.preventDefault(); e.stopPropagation();
+    isDrawing = false;
+    stopDrawing(e); 
   }
-  isDrawing = false; 
-  stopDrawing();
 }, true);
