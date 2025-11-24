@@ -2,6 +2,7 @@ let startX, startY;
 let isDrawing = false;
 let canvas, ctx;
 let path = []; 
+let isGestureCooldown = false; // ★ 추가됨: 제스처 후 메뉴 금지 모드
 
 // --- [설정] ---
 const MIN_DIST = 10; 
@@ -13,11 +14,9 @@ const SCROLL_CHAOS_RATIO = 3.0;
 
 // --- 캔버스 설정 ---
 function createOverlayCanvas() {
-  if (document.getElementById('mouse-gesture-canvas')) {
-    canvas = document.getElementById('mouse-gesture-canvas');
-    ctx = canvas.getContext('2d');
-    return;
-  }
+  const oldCanvas = document.getElementById('mouse-gesture-canvas');
+  if (oldCanvas) oldCanvas.remove();
+
   canvas = document.createElement('canvas');
   canvas.id = 'mouse-gesture-canvas';
   canvas.style.cssText = `
@@ -36,11 +35,10 @@ function styleCanvas() {
 }
 
 if (document.body) createOverlayCanvas();
-else window.addEventListener('DOMContentLoaded', createOverlayCanvas);
+window.addEventListener('DOMContentLoaded', createOverlayCanvas);
 
 // --- 그리기 준비 ---
 function prepareDrawing(e) {
-  // 캔버스가 없으면 재생성 (iframe 환경 대비)
   if (!canvas) createOverlayCanvas();
   
   canvas.width = window.innerWidth; canvas.height = window.innerHeight;
@@ -53,7 +51,7 @@ function prepareDrawing(e) {
 
   try {
     if (e.pointerId !== undefined) canvas.setPointerCapture(e.pointerId);
-  } catch (err) { }
+  } catch (err) {}
 }
 
 function stopDrawing(e) {
@@ -67,39 +65,32 @@ function stopDrawing(e) {
   }
 }
 
-// --- ★ 핵심 수정: 동작 수행 함수 (iframe 통신 추가) ---
+// --- 동작 수행 (iframe 통신 포함) ---
 function performAction(action) {
     console.log("Action Triggered:", action);
     
-    // 1. 탭/네비게이션 관련 (백그라운드로 전송) - 이건 iframe에서도 잘 됨
     if (action === 'back') chrome.runtime.sendMessage({ action: "goBack" });
     else if (action === 'forward') chrome.runtime.sendMessage({ action: "goForward" });
     else if (action === 'refresh') chrome.runtime.sendMessage({ action: "refresh" });
     else if (action === 'close') chrome.runtime.sendMessage({ action: "closeTab" });
     else if (action === 'reopen') chrome.runtime.sendMessage({ action: "reopenTab" });
     
-    // 2. 스크롤 관련 (여기가 문제였음)
     else if (action === 'top' || action === 'bottom') {
-        // 만약 내가 iframe(광고판) 안에 갇혀있다면?
         if (window !== window.top) {
-            // 부모(메인페이지)에게 "스크롤 해줘"라고 부탁함
             window.parent.postMessage({ type: 'GESTURE_SCROLL', dir: action }, '*');
         } else {
-            // 내가 메인페이지라면 직접 스크롤
             if (action === 'top') window.scrollTo(0, 0);
             else window.scrollTo(0, document.body.scrollHeight);
         }
     }
 }
 
-// --- ★ 메인 페이지용 메시지 수신자 (부탁 듣는 귀) ---
 window.addEventListener('message', (event) => {
     if (event.data && event.data.type === 'GESTURE_SCROLL') {
         if (event.data.dir === 'top') window.scrollTo(0, 0);
         else if (event.data.dir === 'bottom') window.scrollTo(0, document.body.scrollHeight);
     }
 });
-
 
 // --- 이벤트 리스너 ---
 
@@ -133,11 +124,18 @@ window.addEventListener('pointerup', (e) => {
     
     stopDrawing(e);
 
+    // 너무 짧으면(단순 클릭) -> 그냥 리턴 (쿨다운 X, 메뉴 뜨게 둠)
     if (path.length < 3 || Math.hypot(diffX, diffY) < MIN_DIST) return;
 
+    // --- ★ 쿨다운 시작 (여기서부터 0.5초간 메뉴 금지) ★ ---
     e.preventDefault(); e.stopPropagation();
+    
+    isGestureCooldown = true; // 쿨다운 ON
+    setTimeout(() => {
+        isGestureCooldown = false; // 0.5초 뒤 OFF
+    }, 500);
 
-    // --- 데이터 분석 ---
+    // --- 데이터 분석 및 동작 실행 ---
     let maxY = startY; let minY = startY;
     let totalPathLength = 0; 
     let totalTraveledX = 0;  
@@ -175,7 +173,7 @@ window.addEventListener('pointerup', (e) => {
     }
     else {
         if (linearityRatio > SCROLL_CHAOS_RATIO) {
-             console.log("Scroll cancelled due to chaos (Scribble).");
+             console.log("Scroll cancelled due to chaos.");
         } 
         else {
             const absX = Math.abs(diffX);
@@ -195,8 +193,12 @@ window.addEventListener('pointerup', (e) => {
   }
 }, true);
 
+// --- 우클릭 메뉴 방지 (쿨다운 로직 포함) ---
 window.addEventListener('contextmenu', (e) => {
-  if (path.length > 5 || (canvas && canvas.style.display === 'block')) { 
+  // 1. 드래그 중이거나 (path 존재)
+  // 2. 캔버스가 켜져 있거나
+  // 3. ★ 쿨다운 중이면 (isGestureCooldown) -> 메뉴 절대 금지!
+  if (path.length > 5 || (canvas && canvas.style.display === 'block') || isGestureCooldown) { 
     e.preventDefault(); e.stopPropagation();
     isDrawing = false;
     stopDrawing(); 
