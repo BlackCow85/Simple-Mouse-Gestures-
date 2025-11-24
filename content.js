@@ -4,7 +4,14 @@ let isDrawing = false;
 const MIN_DIST = 20;
 let canvas, ctx;
 
-// --- 캔버스 관련 함수 (이전과 동일) ---
+// ★ 핵심 수정: 방향 판정 임계값 대폭 완화 ★
+// 0.65 -> 0.5 로 변경.
+// 조금이라도 더 기울어진 방향으로 무조건 인정합니다. (가장 관대한 설정)
+// 이미지처럼 기울어진 'ㅅ' 모양도 이제 'UD'로 인식될 것입니다.
+const DOMINANCE_THRESHOLD = 0.5;
+
+
+// --- 캔버스 관련 함수 (변경 없음) ---
 function createOverlayCanvas() {
   if (document.getElementById('mouse-gesture-canvas')) {
     canvas = document.getElementById('mouse-gesture-canvas');
@@ -44,32 +51,24 @@ function stopDrawing() {
   if (canvas) { canvas.style.display = 'none'; canvas.style.pointerEvents = 'none'; }
 }
 
-// --- ★ 핵심: 스마트 스크롤 함수 (content.js 내부에서 직접 실행) ---
+// --- 스마트 스크롤 함수 (변경 없음) ---
 function performSmartScroll(direction) {
-  // 1차 시도: 기본 window 스크롤
   const startScrollY = window.scrollY;
   if (direction === 'up') window.scrollTo(0, 0);
   else window.scrollTo(0, document.body.scrollHeight);
   
-  // window가 스크롤되었다면 여기서 종료
   if (window.scrollY !== startScrollY || window.scrollY > 0 || document.body.scrollHeight > window.innerHeight) {
-      // 제미나이 같은 사이트는 window 스크롤이 안 먹혀도 여기 조건에 걸릴 수 있어서
-      // 확실한 내부 컨테이너 찾기로 넘어갑니다.
+      // window 스크롤이 먹혔으면 통과
   }
 
-  // 2차 시도: 실제 스크롤 가능한 내부 컨테이너 찾기
-  // 페이지 내의 모든 div, main, section 등을 조사하여 스크롤바가 있는 가장 큰 영역을 찾습니다.
   const candidates = document.querySelectorAll('div, main, section, article, ul');
   let bestContainer = null;
   let maxScrollHeight = 0;
 
   candidates.forEach(el => {
-      // 실제 내용이 넘쳐서 스크롤이 필요한 상태인지 확인
       if (el.scrollHeight > el.clientHeight && el.clientHeight > 50) {
           const style = window.getComputedStyle(el);
-          // CSS 속성이 스크롤을 허용하는지 확인
           if (['auto', 'scroll'].includes(style.overflowY)) {
-              // 가장 스크롤할 내용이 많은 영역을 선택
               if (el.scrollHeight > maxScrollHeight) {
                   maxScrollHeight = el.scrollHeight;
                   bestContainer = el;
@@ -78,7 +77,6 @@ function performSmartScroll(direction) {
       }
   });
 
-  // 찾은 컨테이너를 부드럽게 스크롤
   if (bestContainer) {
     bestContainer.scrollTo({
         top: direction === 'up' ? 0 : bestContainer.scrollHeight,
@@ -102,14 +100,29 @@ window.addEventListener('mousedown', (e) => {
 
 window.addEventListener('mousemove', (e) => {
   if (!isDrawing) return;
+  
   if (ctx) { ctx.lineTo(e.clientX, e.clientY); ctx.stroke(); }
-  const lastX = path.length > 0 ? path[path.length-1].x : startX;
-  const lastY = path.length > 0 ? path[path.length-1].y : startY;
-  const dx = e.clientX - lastX; const dy = e.clientY - lastY;
-  if (Math.abs(dx) > MIN_DIST || Math.abs(dy) > MIN_DIST) {
+
+  const lastPoint = path.length > 0 ? path[path.length-1] : {x: startX, y: startY};
+  const dx = e.clientX - lastPoint.x;
+  const dy = e.clientY - lastPoint.y;
+  const absDx = Math.abs(dx);
+  const absDy = Math.abs(dy);
+
+  if (absDx > MIN_DIST || absDy > MIN_DIST) {
     let direction = '';
-    if (Math.abs(dx) > Math.abs(dy)) direction = dx > 0 ? 'R' : 'L';
-    else direction = dy > 0 ? 'D' : 'U';
+    const totalMovement = absDx + absDy;
+
+    // 임계값 0.5 적용: 45도 기준 조금이라도 더 큰 쪽으로 판정
+    if (absDx / totalMovement > DOMINANCE_THRESHOLD) {
+        direction = dx > 0 ? 'R' : 'L';
+    } else if (absDy / totalMovement > DOMINANCE_THRESHOLD) {
+        direction = dy > 0 ? 'D' : 'U';
+    } else {
+        // 정확히 45도(5:5 비율)인 경우만 여기로 빠짐 (거의 없음)
+        return; 
+    }
+    
     if (path.length === 0 || path[path.length - 1].dir !== direction) {
       path.push({ dir: direction, x: e.clientX, y: e.clientY });
     }
@@ -120,10 +133,11 @@ window.addEventListener('mouseup', (e) => {
   if (e.button === 2 && isDrawing) {
     e.preventDefault(); e.stopPropagation();
     isDrawing = false; stopDrawing();
+
     if (path.length > 0) {
       const gesture = path.map(p => p.dir).join('');
-      
-      // ★ 스크롤 동작은 이제 직접 실행, 나머지는 백그라운드로 요청 ★
+      console.log("Final Gesture:", gesture);
+
       if (gesture === 'U') performSmartScroll('up');
       else if (gesture === 'D') performSmartScroll('down');
       else if (gesture === 'L') chrome.runtime.sendMessage({ action: "goBack" });
