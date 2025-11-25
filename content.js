@@ -2,7 +2,7 @@ let startX, startY;
 let isDrawing = false;
 let canvas, ctx;
 let path = []; 
-let isGestureCooldown = false; // ★ 추가됨: 제스처 후 메뉴 금지 모드
+let isGestureCooldown = false; 
 
 // --- [설정] ---
 const MIN_DIST = 10; 
@@ -65,7 +65,7 @@ function stopDrawing(e) {
   }
 }
 
-// --- 동작 수행 (iframe 통신 포함) ---
+// --- 동작 수행 ---
 function performAction(action) {
     console.log("Action Triggered:", action);
     
@@ -124,18 +124,14 @@ window.addEventListener('pointerup', (e) => {
     
     stopDrawing(e);
 
-    // 너무 짧으면(단순 클릭) -> 그냥 리턴 (쿨다운 X, 메뉴 뜨게 둠)
     if (path.length < 3 || Math.hypot(diffX, diffY) < MIN_DIST) return;
 
-    // --- ★ 쿨다운 시작 (여기서부터 0.5초간 메뉴 금지) ★ ---
     e.preventDefault(); e.stopPropagation();
     
-    isGestureCooldown = true; // 쿨다운 ON
-    setTimeout(() => {
-        isGestureCooldown = false; // 0.5초 뒤 OFF
-    }, 500);
+    isGestureCooldown = true; 
+    setTimeout(() => { isGestureCooldown = false; }, 500);
 
-    // --- 데이터 분석 및 동작 실행 ---
+    // --- 데이터 분석 ---
     let maxY = startY; let minY = startY;
     let totalPathLength = 0; 
     let totalTraveledX = 0;  
@@ -153,24 +149,40 @@ window.addEventListener('pointerup', (e) => {
         }
     }
 
-    const wentDown = (maxY - startY) > 50; 
-    const wentUp = (startY - minY) > 50;   
+    // 위로 얼마나 갔나 vs 아래로 얼마나 갔나 계산
+    const upHeight = startY - minY;  // 위로 솟은 높이
+    const downHeight = maxY - startY; // 아래로 꺼진 깊이
+
+    const wentDown = downHeight > 50; 
+    const wentUp = upHeight > 50;   
     const returnedY = Math.abs(endY - startY) < RETURN_TOLERANCE; 
+
+    // ★ 핵심 수정: 누가 더 큰지 비교해서 승자를 정함
+    const isMostlyUp = upHeight > downHeight;   // 위로 더 많이 갔으면 탭닫기 유력
+    const isMostlyDown = downHeight > upHeight; // 아래로 더 많이 갔으면 새로고침 유력
 
     const directDistance = Math.hypot(diffX, diffY);
     const linearityRatio = directDistance > 20 ? (totalPathLength / directDistance) : 999;
 
     let action = null;
 
-    if (wentDown && returnedY) { 
+    // 1. [새로고침 (DU)] 
+    // 조건: 아래로 갔고 + 돌아왔고 + (★아래로 간 길이가 위로 간 것보다 커야 함)
+    if (wentDown && returnedY && isMostlyDown) { 
         if (totalTraveledX < MAX_X_TRAVEL_FOR_V) action = 'refresh';
     }
-    else if (wentUp && returnedY) { 
+    // 2. [탭 닫기 (UD)] 
+    // 조건: 위로 갔고 + 돌아왔고 + (★위로 간 길이가 아래로 간 것보다 커야 함)
+    else if (wentUp && returnedY && isMostlyUp) { 
         if (totalTraveledX < MAX_X_TRAVEL_FOR_V) action = 'close';
     }
+    
+    // 3. [닫힌 탭 열기 (UR)]
     else if (wentUp && diffX > RECOGNITION_THRESHOLD) {
         action = 'reopen';
     }
+
+    // 4. [단순 이동]
     else {
         if (linearityRatio > SCROLL_CHAOS_RATIO) {
              console.log("Scroll cancelled due to chaos.");
@@ -193,11 +205,7 @@ window.addEventListener('pointerup', (e) => {
   }
 }, true);
 
-// --- 우클릭 메뉴 방지 (쿨다운 로직 포함) ---
 window.addEventListener('contextmenu', (e) => {
-  // 1. 드래그 중이거나 (path 존재)
-  // 2. 캔버스가 켜져 있거나
-  // 3. ★ 쿨다운 중이면 (isGestureCooldown) -> 메뉴 절대 금지!
   if (path.length > 5 || (canvas && canvas.style.display === 'block') || isGestureCooldown) { 
     e.preventDefault(); e.stopPropagation();
     isDrawing = false;
