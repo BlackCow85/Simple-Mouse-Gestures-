@@ -4,11 +4,20 @@ let canvas, ctx;
 let path = []; 
 let isGestureCooldown = false; 
 
-// --- [설정] ---
-const MIN_DIST = 10; 
+// --- [설정: 민감도 조정] ---
+// ★ 수정됨: 최소 이동 거리 (기존 10 -> 60)
+// 시작점과 끝점이 60px 이상 벌어지지 않으면 아예 무시 (짧은 선 방지)
+const MIN_DIST = 60; 
+
+// '닫힌 탭 열기' 감지 길이 (기존 150 유지)
 const RECOGNITION_THRESHOLD = 150; 
 const RETURN_TOLERANCE = 100; 
 
+// ★ 수정됨: V자 제스처(새로고침/닫기) 인식 최소 높이 (기존 50 -> 120)
+// 위/아래로 120px 이상 확실하게 갔다 와야 인정됨
+const V_GESTURE_MIN_HEIGHT = 120;
+
+// 낙서 방지 설정
 const MAX_X_TRAVEL_FOR_V = 300; 
 const SCROLL_CHAOS_RATIO = 3.0;
 
@@ -124,6 +133,8 @@ window.addEventListener('pointerup', (e) => {
     
     stopDrawing(e);
 
+    // ★ 수정됨: 최소 거리 체크 (MIN_DIST = 60)
+    // 60px 미만으로 움직였으면(첫번째 사진 같은 경우) 그냥 무시
     if (path.length < 3 || Math.hypot(diffX, diffY) < MIN_DIST) return;
 
     e.preventDefault(); e.stopPropagation();
@@ -149,17 +160,17 @@ window.addEventListener('pointerup', (e) => {
         }
     }
 
-    // 위로 얼마나 갔나 vs 아래로 얼마나 갔나 계산
-    const upHeight = startY - minY;  // 위로 솟은 높이
-    const downHeight = maxY - startY; // 아래로 꺼진 깊이
+    const upHeight = startY - minY;  
+    const downHeight = maxY - startY; 
 
-    const wentDown = downHeight > 50; 
-    const wentUp = upHeight > 50;   
+    // ★ 수정됨: V자 높이 체크 (V_GESTURE_MIN_HEIGHT = 120)
+    // 위나 아래로 120px 이상은 움직여야 V자 제스처로 인정
+    const wentDown = downHeight > V_GESTURE_MIN_HEIGHT; 
+    const wentUp = upHeight > V_GESTURE_MIN_HEIGHT;   
     const returnedY = Math.abs(endY - startY) < RETURN_TOLERANCE; 
 
-    // ★ 핵심 수정: 누가 더 큰지 비교해서 승자를 정함
-    const isMostlyUp = upHeight > downHeight;   // 위로 더 많이 갔으면 탭닫기 유력
-    const isMostlyDown = downHeight > upHeight; // 아래로 더 많이 갔으면 새로고침 유력
+    const isMostlyUp = upHeight > downHeight;   
+    const isMostlyDown = downHeight > upHeight; 
 
     const directDistance = Math.hypot(diffX, diffY);
     const linearityRatio = directDistance > 20 ? (totalPathLength / directDistance) : 999;
@@ -167,12 +178,10 @@ window.addEventListener('pointerup', (e) => {
     let action = null;
 
     // 1. [새로고침 (DU)] 
-    // 조건: 아래로 갔고 + 돌아왔고 + (★아래로 간 길이가 위로 간 것보다 커야 함)
     if (wentDown && returnedY && isMostlyDown) { 
         if (totalTraveledX < MAX_X_TRAVEL_FOR_V) action = 'refresh';
     }
     // 2. [탭 닫기 (UD)] 
-    // 조건: 위로 갔고 + 돌아왔고 + (★위로 간 길이가 아래로 간 것보다 커야 함)
     else if (wentUp && returnedY && isMostlyUp) { 
         if (totalTraveledX < MAX_X_TRAVEL_FOR_V) action = 'close';
     }
