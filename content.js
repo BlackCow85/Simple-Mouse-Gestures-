@@ -4,18 +4,22 @@ let canvas, ctx;
 let path = []; 
 let isGestureCooldown = false; 
 
-// --- [설정: 민감도 조정] ---
-// ★ 수정됨: 최소 이동 거리 (기존 10 -> 60)
-// 시작점과 끝점이 60px 이상 벌어지지 않으면 아예 무시 (짧은 선 방지)
-const MIN_DIST = 60; 
+// --- [설정] ---
+// 1. 기본 최소 인식 거리 (클릭 방지용, 아주 짧게 설정)
+// 이걸 늘리면 V자 제스처가 안 먹히므로 5px로 유지해야 함!
+const MIN_DIST_GLOBAL = 5; 
 
-// '닫힌 탭 열기' 감지 길이 (기존 150 유지)
+// 2. [직선 스크롤용] 최소 길이 (깨작거림 방지)
+// 맨위로/맨아래로 하려면 적어도 80px은 그어야 함 (첫번째 사진 방지)
+const MIN_LEN_FOR_SCROLL = 80;
+
+// 3. [V자 제스처용] 최소 높이
+// 새로고침/닫기를 하려면 위아래로 100px 이상은 움직여야 함
+const MIN_HEIGHT_FOR_V = 100;
+
+// '닫힌 탭 열기' 감지 길이
 const RECOGNITION_THRESHOLD = 150; 
 const RETURN_TOLERANCE = 100; 
-
-// ★ 수정됨: V자 제스처(새로고침/닫기) 인식 최소 높이 (기존 50 -> 120)
-// 위/아래로 120px 이상 확실하게 갔다 와야 인정됨
-const V_GESTURE_MIN_HEIGHT = 120;
 
 // 낙서 방지 설정
 const MAX_X_TRAVEL_FOR_V = 300; 
@@ -133,9 +137,8 @@ window.addEventListener('pointerup', (e) => {
     
     stopDrawing(e);
 
-    // ★ 수정됨: 최소 거리 체크 (MIN_DIST = 60)
-    // 60px 미만으로 움직였으면(첫번째 사진 같은 경우) 그냥 무시
-    if (path.length < 3 || Math.hypot(diffX, diffY) < MIN_DIST) return;
+    // ★ 수정됨: 글로벌 최소 거리는 5px로 낮춤 (V자 생존)
+    if (path.length < 3 || Math.hypot(diffX, diffY) < MIN_DIST_GLOBAL) return;
 
     e.preventDefault(); e.stopPropagation();
     
@@ -162,11 +165,10 @@ window.addEventListener('pointerup', (e) => {
 
     const upHeight = startY - minY;  
     const downHeight = maxY - startY; 
-
-    // ★ 수정됨: V자 높이 체크 (V_GESTURE_MIN_HEIGHT = 120)
-    // 위나 아래로 120px 이상은 움직여야 V자 제스처로 인정
-    const wentDown = downHeight > V_GESTURE_MIN_HEIGHT; 
-    const wentUp = upHeight > V_GESTURE_MIN_HEIGHT;   
+    
+    // ★ V자 높이 체크 (100px 이상이어야 함)
+    const wentDown = downHeight > MIN_HEIGHT_FOR_V; 
+    const wentUp = upHeight > MIN_HEIGHT_FOR_V;   
     const returnedY = Math.abs(endY - startY) < RETURN_TOLERANCE; 
 
     const isMostlyUp = upHeight > downHeight;   
@@ -178,6 +180,7 @@ window.addEventListener('pointerup', (e) => {
     let action = null;
 
     // 1. [새로고침 (DU)] 
+    // V자는 directDistance가 짧아도 실행되어야 함 (그래서 MIN_LEN_FOR_SCROLL 체크 안 함)
     if (wentDown && returnedY && isMostlyDown) { 
         if (totalTraveledX < MAX_X_TRAVEL_FOR_V) action = 'refresh';
     }
@@ -191,9 +194,15 @@ window.addEventListener('pointerup', (e) => {
         action = 'reopen';
     }
 
-    // 4. [단순 이동]
+    // 4. [단순 이동 (스크롤/페이지이동)]
+    // ★ 여기서 "길게 그려야 반응" 로직 적용
     else {
-        if (linearityRatio > SCROLL_CHAOS_RATIO) {
+        // 거리 80px 미만이면 무시 (깨작거림 방지)
+        if (directDistance < MIN_LEN_FOR_SCROLL) {
+            console.log("Too short for scroll action.");
+        }
+        // 낙서(비율) 체크
+        else if (linearityRatio > SCROLL_CHAOS_RATIO) {
              console.log("Scroll cancelled due to chaos.");
         } 
         else {
