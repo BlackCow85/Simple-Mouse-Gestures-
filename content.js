@@ -12,13 +12,14 @@ const RECOGNITION_THRESHOLD = 80;
 const RETURN_TOLERANCE = 100; 
 
 // --- [낙서 방지 설정] ---
-const SCROLL_CHAOS_RATIO = 3.0; // 직선 제스처용 비율
-const V_SHAPE_WIDTH_RATIO = 0.6; // V자 너비 비율
-
-// ★ 핵심 추가: 수직 반복(Efficiency) 체크
-// 정상적인 V자(탭닫기)는 위로 갔다 아래로 오므로 (이동거리 / 높이)가 약 2.0입니다.
-// 이 값이 2.6을 넘는다는 건 위아래로 2번 이상 왔다갔다(낙서) 했다는 뜻입니다.
+const SCROLL_CHAOS_RATIO = 3.0; 
+const V_SHAPE_WIDTH_RATIO = 0.6; 
 const MAX_V_EFFICIENCY_RATIO = 2.6;
+
+// ★ 핵심 추가: 직선 엄격성(Straightness) 설정
+// 기본 이동(상하좌우) 시, 주 방향 대비 보조 방향의 이동량이 40%를 넘으면 무시
+// 예: 위로 100px 갈 때 옆으로 40px 이상 새면 "이건 직선이 아니라 대각선/L자다"라고 판단
+const STRAIGHT_TOLERANCE = 0.4;
 
 
 // --- 캔버스 설정 ---
@@ -162,8 +163,6 @@ window.addEventListener('pointerup', (e) => {
 
     const upHeight = startY - minY;  
     const downHeight = maxY - startY; 
-    
-    // 전체 수직 범위 (Range)
     const gestureHeight = maxY - minY; 
 
     const wentDown = downHeight > MIN_HEIGHT_FOR_V; 
@@ -175,72 +174,58 @@ window.addEventListener('pointerup', (e) => {
 
     const directDistance = Math.hypot(diffX, diffY);
     
-    // 1. 직선 제스처용 비율
     const linearityRatio = directDistance > 20 ? (totalPathLength / directDistance) : 999;
     const isChaosScroll = linearityRatio > SCROLL_CHAOS_RATIO;
 
-    // 2. V자 제스처용 낙서 검사
-    // [검사 A] 너비가 너무 넓은가?
     const isTooWideShape = gestureHeight > 0 ? (totalTraveledX / gestureHeight > V_SHAPE_WIDTH_RATIO) : true;
-    
-    // [검사 B - ★핵심] 위아래로 너무 많이 왔다갔다 했는가?
-    // 정상 V자는 (총이동 Y / 수직높이)가 2.0 근처여야 함.
-    // 실타래 낙서는 이 값이 3.0, 4.0 등 높게 나옴.
     const verticalEfficiency = gestureHeight > 20 ? (totalTraveledY / gestureHeight) : 999;
     const isRepetitiveChaos = verticalEfficiency > MAX_V_EFFICIENCY_RATIO;
 
-
     let action = null;
 
-    // --- 판독 로직 ---
-
-    // 1. [닫힌 탭 열기 (UR)]
+    // 1. [닫힌 탭 열기 (UR)] - 특수 동작이므로 최우선
     if (wentUp && diffX > RECOGNITION_THRESHOLD) {
-        if (!isChaosScroll) {
-            action = 'reopen';
-        } else {
-            console.log("Reopen ignored: Chaos detected.");
-        }
+        if (!isChaosScroll) action = 'reopen';
     }
 
     // 2. [새로고침 (DU)] 
-    // 조건: 너무 넓지 않고(Wide), 너무 반복되지 않았을 때(Repetitive)
     else if (wentDown && returnedY && isMostlyDown) { 
-        if (!isTooWideShape && !isRepetitiveChaos) {
-            action = 'refresh';
-        } else {
-            console.log(`Refresh ignored: Wide(${isTooWideShape}) or Repetitive(${isRepetitiveChaos}, val:${verticalEfficiency.toFixed(2)})`);
-        }
+        if (!isTooWideShape && !isRepetitiveChaos) action = 'refresh';
     }
 
     // 3. [탭 닫기 (UD)] 
-    // 조건: 너무 넓지 않고(Wide), 너무 반복되지 않았을 때(Repetitive)
     else if (wentUp && returnedY && isMostlyUp) { 
-        if (!isTooWideShape && !isRepetitiveChaos) {
-            action = 'close';
-        } else {
-            console.log(`CloseTab ignored: Wide(${isTooWideShape}) or Repetitive(${isRepetitiveChaos}, val:${verticalEfficiency.toFixed(2)})`);
-        }
+        if (!isTooWideShape && !isRepetitiveChaos) action = 'close';
     }
     
-    // 4. [단순 이동 (스크롤)]
+    // 4. [단순 이동 (상하좌우)]
+    // ★ 여기가 수정됨: 엄격한 직선 검사 (미지정 제스처 차단)
     else {
-        if (directDistance < MIN_LEN_FOR_SCROLL) {
-            // 너무 짧음
-        }
-        else if (isChaosScroll) {
-             console.log("Scroll ignored: Chaos detected.");
-        } 
+        const absX = Math.abs(diffX);
+        const absY = Math.abs(diffY);
+
+        if (directDistance < MIN_LEN_FOR_SCROLL) { /* 너무 짧음 */ }
+        else if (isChaosScroll) { console.log("Chaos ignored"); }
         else {
-            const absX = Math.abs(diffX);
-            const absY = Math.abs(diffY);
-            
             if (absX > absY) { 
-                if (diffX > 0) action = 'forward'; 
-                else action = 'back';             
+                // [가로 이동 후보]
+                // 세로로 샌 정도(absY)가 가로 이동(absX)의 40% 미만이어야 함
+                // 예: 왼쪽으로 100 가는데 위로 50 가면 -> 탈락 (대각선/L자이므로)
+                if (absY < absX * STRAIGHT_TOLERANCE) {
+                    if (diffX > 0) action = 'forward'; 
+                    else action = 'back';             
+                } else {
+                    console.log("Ignored: Not straight enough (Horizontal)");
+                }
             } else { 
-                if (diffY > 0) action = 'bottom';  
-                else action = 'top';               
+                // [세로 이동 후보]
+                // 가로로 샌 정도(absX)가 세로 이동(absY)의 40% 미만이어야 함
+                if (absX < absY * STRAIGHT_TOLERANCE) {
+                    if (diffY > 0) action = 'bottom';  
+                    else action = 'top';               
+                } else {
+                    console.log("Ignored: Not straight enough (Vertical)");
+                }
             }
         }
     }
