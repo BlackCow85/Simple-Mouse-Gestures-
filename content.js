@@ -4,22 +4,30 @@ let canvas, ctx;
 let path = []; 
 let isGestureCooldown = false; 
 
-// --- [설정: 민감도 최적화] ---
+// ★ 자동 스크롤 제어
+let autoScrollId = null;
+let isAutoScrolling = false;
+
+// --- [설정: 민감도] ---
 const MIN_DIST_GLOBAL = 5; 
-const MIN_LEN_FOR_SCROLL = 30;
-const MIN_HEIGHT_FOR_V = 30;
+const MIN_LEN_FOR_SCROLL = 30; // 30px 이상 그으면 인식
+const MIN_HEIGHT_FOR_V = 30;   // V자 높이 30px
 const RECOGNITION_THRESHOLD = 80; 
 const RETURN_TOLERANCE = 100; 
 
-// --- [낙서 방지 설정] ---
+const AUTO_SCROLL_TRIGGER_WIDTH = 50;
+
+// --- [낙서 및 오작동 방지 설정] ---
 const SCROLL_CHAOS_RATIO = 3.0; 
-const V_SHAPE_WIDTH_RATIO = 0.6; 
+const V_SHAPE_WIDTH_RATIO = 0.8; // V자 너비 허용량 완화 (0.6 -> 0.8)
 const MAX_V_EFFICIENCY_RATIO = 2.6;
 
-// ★ 핵심 추가: 직선 엄격성(Straightness) 설정
-// 기본 이동(상하좌우) 시, 주 방향 대비 보조 방향의 이동량이 40%를 넘으면 무시
-// 예: 위로 100px 갈 때 옆으로 40px 이상 새면 "이건 직선이 아니라 대각선/L자다"라고 판단
-const STRAIGHT_TOLERANCE = 0.4;
+// ★ 직선 이동(상하좌우) 방향 허용 오차 (0.6 = 약 30도)
+const STRAIGHT_TOLERANCE = 0.6;
+
+// ★ 핵심 추가: 단순 이동 시 "꺾임(L자)" 방지 비율
+// 직선은 1.0, L자는 약 1.41입니다. 1.25 넘으면 "직선 아님"으로 간주.
+const SIMPLE_MOVE_LINEARITY_LIMIT = 1.25;
 
 
 // --- 캔버스 설정 ---
@@ -49,14 +57,18 @@ window.addEventListener('DOMContentLoaded', createOverlayCanvas);
 
 // --- 그리기 준비 ---
 function prepareDrawing(e) {
+  if (isAutoScrolling) {
+      stopAutoScroll();
+      if (window !== window.top) {
+          window.parent.postMessage({ type: 'GESTURE_STOP_AUTOSCROLL' }, '*');
+      }
+  }
+
   if (!canvas) createOverlayCanvas();
-  
   canvas.width = window.innerWidth; canvas.height = window.innerHeight;
   styleCanvas();
-  
   canvas.style.display = 'block'; 
   canvas.style.pointerEvents = 'auto'; 
-  
   ctx.beginPath(); ctx.moveTo(e.clientX, e.clientY);
 
   try {
@@ -75,6 +87,29 @@ function stopDrawing(e) {
   }
 }
 
+// --- 자동 스크롤 엔진 ---
+function startAutoScroll() {
+    if (isAutoScrolling) return;
+    isAutoScrolling = true;
+    const speed = 15; 
+    
+    function scrollLoop() {
+        if (!isAutoScrolling) return;
+        window.scrollBy(0, speed);
+        if ((window.innerHeight + window.scrollY) >= document.body.offsetHeight) {
+            stopAutoScroll();
+            return;
+        }
+        autoScrollId = requestAnimationFrame(scrollLoop);
+    }
+    scrollLoop();
+}
+
+function stopAutoScroll() {
+    isAutoScrolling = false;
+    if (autoScrollId) cancelAnimationFrame(autoScrollId);
+}
+
 // --- 동작 수행 ---
 function performAction(action) {
     console.log("Action Triggered:", action);
@@ -85,6 +120,13 @@ function performAction(action) {
     else if (action === 'close') chrome.runtime.sendMessage({ action: "closeTab" });
     else if (action === 'reopen') chrome.runtime.sendMessage({ action: "reopenTab" });
     
+    else if (action === 'autoScroll') {
+        if (window !== window.top) {
+            window.parent.postMessage({ type: 'GESTURE_START_AUTOSCROLL' }, '*');
+        } else {
+            startAutoScroll();
+        }
+    }
     else if (action === 'top' || action === 'bottom') {
         if (window !== window.top) {
             window.parent.postMessage({ type: 'GESTURE_SCROLL', dir: action }, '*');
@@ -96,13 +138,26 @@ function performAction(action) {
 }
 
 window.addEventListener('message', (event) => {
-    if (event.data && event.data.type === 'GESTURE_SCROLL') {
+    if (!event.data) return;
+    if (event.data.type === 'GESTURE_SCROLL') {
         if (event.data.dir === 'top') window.scrollTo(0, 0);
         else if (event.data.dir === 'bottom') window.scrollTo(0, document.body.scrollHeight);
+    }
+    else if (event.data.type === 'GESTURE_START_AUTOSCROLL') {
+        startAutoScroll();
+    }
+    else if (event.data.type === 'GESTURE_STOP_AUTOSCROLL') {
+        stopAutoScroll();
     }
 });
 
 // --- 이벤트 리스너 ---
+window.addEventListener('mousedown', () => {
+    if (isAutoScrolling) {
+        stopAutoScroll();
+        if (window !== window.top) window.parent.postMessage({ type: 'GESTURE_STOP_AUTOSCROLL' }, '*');
+    }
+}, true);
 
 window.addEventListener('pointerdown', (e) => {
   if (e.button === 2) { 
@@ -165,66 +220,69 @@ window.addEventListener('pointerup', (e) => {
     const downHeight = maxY - startY; 
     const gestureHeight = maxY - minY; 
 
+    // V자 제스처 감도
     const wentDown = downHeight > MIN_HEIGHT_FOR_V; 
     const wentUp = upHeight > MIN_HEIGHT_FOR_V;   
-    const returnedY = Math.abs(endY - startY) < RETURN_TOLERANCE; 
+    
+    // 제자리 복귀 판정 (기존 0.7 비율 제거하고 100px 절대값만 사용 -> Close/Refresh 인식률 향상)
+    const distY = Math.abs(endY - startY);
+    const returnedY = distY < RETURN_TOLERANCE;
 
     const isMostlyUp = upHeight > downHeight;   
     const isMostlyDown = downHeight > upHeight; 
 
     const directDistance = Math.hypot(diffX, diffY);
-    
     const linearityRatio = directDistance > 20 ? (totalPathLength / directDistance) : 999;
+    
     const isChaosScroll = linearityRatio > SCROLL_CHAOS_RATIO;
-
     const isTooWideShape = gestureHeight > 0 ? (totalTraveledX / gestureHeight > V_SHAPE_WIDTH_RATIO) : true;
     const verticalEfficiency = gestureHeight > 20 ? (totalTraveledY / gestureHeight) : 999;
     const isRepetitiveChaos = verticalEfficiency > MAX_V_EFFICIENCY_RATIO;
 
     let action = null;
 
-    // 1. [닫힌 탭 열기 (UR)] - 특수 동작이므로 최우선
+    // 1. [닫힌 탭 열기 (UR)]
+    // 조건 강화: 위로 가는 척하면서 오른쪽으로 가야 함. (UpHeight 대비 Width가 너무 작으면 안됨)
     if (wentUp && diffX > RECOGNITION_THRESHOLD) {
         if (!isChaosScroll) action = 'reopen';
     }
-
     // 2. [새로고침 (DU)] 
     else if (wentDown && returnedY && isMostlyDown) { 
         if (!isTooWideShape && !isRepetitiveChaos) action = 'refresh';
     }
-
     // 3. [탭 닫기 (UD)] 
     else if (wentUp && returnedY && isMostlyUp) { 
         if (!isTooWideShape && !isRepetitiveChaos) action = 'close';
     }
-    
-    // 4. [단순 이동 (상하좌우)]
-    // ★ 여기가 수정됨: 엄격한 직선 검사 (미지정 제스처 차단)
+    // 4. [자동 스크롤 (DR)]
+    else if (wentDown && diffX > AUTO_SCROLL_TRIGGER_WIDTH) {
+        if (!isChaosScroll) action = 'autoScroll';
+    }
+    // 5. [단순 이동 (상하좌우)]
     else {
         const absX = Math.abs(diffX);
         const absY = Math.abs(diffY);
-
+        
         if (directDistance < MIN_LEN_FOR_SCROLL) { /* 너무 짧음 */ }
         else if (isChaosScroll) { console.log("Chaos ignored"); }
         else {
-            if (absX > absY) { 
-                // [가로 이동 후보]
-                // 세로로 샌 정도(absY)가 가로 이동(absX)의 40% 미만이어야 함
-                // 예: 왼쪽으로 100 가는데 위로 50 가면 -> 탈락 (대각선/L자이므로)
-                if (absY < absX * STRAIGHT_TOLERANCE) {
-                    if (diffX > 0) action = 'forward'; 
-                    else action = 'back';             
-                } else {
-                    console.log("Ignored: Not straight enough (Horizontal)");
-                }
-            } else { 
-                // [세로 이동 후보]
-                // 가로로 샌 정도(absX)가 세로 이동(absY)의 40% 미만이어야 함
-                if (absX < absY * STRAIGHT_TOLERANCE) {
-                    if (diffY > 0) action = 'bottom';  
-                    else action = 'top';               
-                } else {
-                    console.log("Ignored: Not straight enough (Vertical)");
+            // ★ L자 모양 꺾임 방지 (Linearity Check)
+            // 직선 제스처는 linearityRatio가 1.0에 가깝습니다. 
+            // '↑←' 같은 꺾인 제스처는 비율이 1.4를 넘습니다.
+            if (linearityRatio > SIMPLE_MOVE_LINEARITY_LIMIT) {
+                console.log("Ignored: Path too curved (L-shape detected)");
+            } 
+            else {
+                if (absX > absY) { 
+                    if (absY < absX * STRAIGHT_TOLERANCE) {
+                        if (diffX > 0) action = 'forward'; 
+                        else action = 'back';             
+                    }
+                } else { 
+                    if (absX < absY * STRAIGHT_TOLERANCE) {
+                        if (diffY > 0) action = 'bottom';  
+                        else action = 'top';               
+                    }
                 }
             }
         }
