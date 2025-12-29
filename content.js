@@ -19,14 +19,13 @@ const AUTO_SCROLL_TRIGGER_WIDTH = 50;
 
 // --- [낙서 및 오작동 방지 설정] ---
 const SCROLL_CHAOS_RATIO = 3.0; 
-const V_SHAPE_WIDTH_RATIO = 0.8; // V자 너비 허용량 완화 (0.6 -> 0.8)
+const V_SHAPE_WIDTH_RATIO = 0.8; 
 const MAX_V_EFFICIENCY_RATIO = 2.6;
 
 // ★ 직선 이동(상하좌우) 방향 허용 오차 (0.6 = 약 30도)
 const STRAIGHT_TOLERANCE = 0.6;
 
-// ★ 핵심 추가: 단순 이동 시 "꺾임(L자)" 방지 비율
-// 직선은 1.0, L자는 약 1.41입니다. 1.25 넘으면 "직선 아님"으로 간주.
+// ★ 단순 이동 시 "꺾임(L자)" 방지 비율
 const SIMPLE_MOVE_LINEARITY_LIMIT = 1.25;
 
 
@@ -224,9 +223,12 @@ window.addEventListener('pointerup', (e) => {
     const wentDown = downHeight > MIN_HEIGHT_FOR_V; 
     const wentUp = upHeight > MIN_HEIGHT_FOR_V;   
     
-    // 제자리 복귀 판정 (기존 0.7 비율 제거하고 100px 절대값만 사용 -> Close/Refresh 인식률 향상)
+    // ★ 핵심 수정: 제자리 복귀(Returned) 판정 강화
+    // 1. 끝점이 시작점 근처여야 함 (기본 100px)
+    // 2. AND 시작점-끝점 거리가 전체 이동 높이의 80% 미만이어야 함 (즉, 높이만큼은 다시 돌아왔어야 함)
+    // 예: 위로 50px만 긋고 멈추면 distY=50, Height=50. 50 < 40(80%) False -> 탭닫기 아님 (직선)
     const distY = Math.abs(endY - startY);
-    const returnedY = distY < RETURN_TOLERANCE;
+    const returnedY = distY < RETURN_TOLERANCE && distY < (gestureHeight * 0.8);
 
     const isMostlyUp = upHeight > downHeight;   
     const isMostlyDown = downHeight > upHeight; 
@@ -242,7 +244,6 @@ window.addEventListener('pointerup', (e) => {
     let action = null;
 
     // 1. [닫힌 탭 열기 (UR)]
-    // 조건 강화: 위로 가는 척하면서 오른쪽으로 가야 함. (UpHeight 대비 Width가 너무 작으면 안됨)
     if (wentUp && diffX > RECOGNITION_THRESHOLD) {
         if (!isChaosScroll) action = 'reopen';
     }
@@ -266,9 +267,7 @@ window.addEventListener('pointerup', (e) => {
         if (directDistance < MIN_LEN_FOR_SCROLL) { /* 너무 짧음 */ }
         else if (isChaosScroll) { console.log("Chaos ignored"); }
         else {
-            // ★ L자 모양 꺾임 방지 (Linearity Check)
-            // 직선 제스처는 linearityRatio가 1.0에 가깝습니다. 
-            // '↑←' 같은 꺾인 제스처는 비율이 1.4를 넘습니다.
+            // L자 모양 꺾임 방지
             if (linearityRatio > SIMPLE_MOVE_LINEARITY_LIMIT) {
                 console.log("Ignored: Path too curved (L-shape detected)");
             } 
