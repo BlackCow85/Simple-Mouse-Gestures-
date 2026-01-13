@@ -10,8 +10,8 @@ let isAutoScrolling = false;
 
 // --- [설정: 민감도] ---
 const MIN_DIST_GLOBAL = 5; 
-const MIN_LEN_FOR_SCROLL = 30; // 30px 이상 그으면 인식
-const MIN_HEIGHT_FOR_V = 30;   // V자 높이 30px
+const MIN_LEN_FOR_SCROLL = 30;
+const MIN_HEIGHT_FOR_V = 30;   
 const RECOGNITION_THRESHOLD = 80; 
 const RETURN_TOLERANCE = 100; 
 
@@ -21,11 +21,7 @@ const AUTO_SCROLL_TRIGGER_WIDTH = 50;
 const SCROLL_CHAOS_RATIO = 3.0; 
 const V_SHAPE_WIDTH_RATIO = 0.8; 
 const MAX_V_EFFICIENCY_RATIO = 2.6;
-
-// ★ 직선 이동(상하좌우) 방향 허용 오차 (0.6 = 약 30도)
 const STRAIGHT_TOLERANCE = 0.6;
-
-// ★ 단순 이동 시 "꺾임(L자)" 방지 비율
 const SIMPLE_MOVE_LINEARITY_LIMIT = 1.25;
 
 
@@ -64,6 +60,19 @@ function prepareDrawing(e) {
   }
 
   if (!canvas) createOverlayCanvas();
+
+  // 유튜브 전체화면 대응
+  const fsElement = document.fullscreenElement;
+  if (fsElement) {
+      if (canvas.parentNode !== fsElement) {
+          fsElement.appendChild(canvas);
+      }
+  } else {
+      if (!canvas.isConnected) {
+          (document.documentElement || document.body).appendChild(canvas);
+      }
+  }
+
   canvas.width = window.innerWidth; canvas.height = window.innerHeight;
   styleCanvas();
   canvas.style.display = 'block'; 
@@ -91,10 +100,10 @@ function startAutoScroll() {
     if (isAutoScrolling) return;
     isAutoScrolling = true;
     const speed = 15; 
-    
     function scrollLoop() {
         if (!isAutoScrolling) return;
         window.scrollBy(0, speed);
+        // iframe 내부에서도 바닥 체크
         if ((window.innerHeight + window.scrollY) >= document.body.offsetHeight) {
             stopAutoScroll();
             return;
@@ -109,6 +118,45 @@ function stopAutoScroll() {
     if (autoScrollId) cancelAnimationFrame(autoScrollId);
 }
 
+// --- ★ [NEW] 하이브리드 입력 엔진 (Target: document.body) ---
+function executeHybridScroll(direction) {
+    const keyName = (direction === 'top') ? 'Home' : 'End';
+    const keyCodeVal = (direction === 'top') ? 36 : 35; 
+
+    const eventOptions = { 
+        key: keyName, 
+        code: keyName, 
+        keyCode: keyCodeVal,
+        which: keyCodeVal,
+        bubbles: true, 
+        cancelable: true,
+        composed: true, 
+        view: window 
+    };
+
+    // 1. [트리거] document.body에 키보드 이벤트 발사 (유튜브 대응)
+    try { 
+        const target = document.body || document.documentElement;
+        target.dispatchEvent(new KeyboardEvent('keydown', eventOptions)); 
+    } catch(e){}
+
+    // 2. [실행] 좌표 강제 이동 (네이버 블로그 Iframe 내부 스크롤 대응)
+    if (direction === 'top') {
+        window.scrollTo(0, 0);
+    } else if (direction === 'bottom') {
+        window.scrollTo(0, document.body.scrollHeight);
+    }
+
+    // 3. [확인사살] 스크롤 이벤트
+    try { window.dispatchEvent(new Event('scroll', { bubbles: true })); } catch(e){}
+
+    // 4. [마무리] 키보드 뗌
+    try { 
+        const target = document.body || document.documentElement;
+        target.dispatchEvent(new KeyboardEvent('keyup', eventOptions)); 
+    } catch(e){}
+}
+
 // --- 동작 수행 ---
 function performAction(action) {
     console.log("Action Triggered:", action);
@@ -119,28 +167,36 @@ function performAction(action) {
     else if (action === 'close') chrome.runtime.sendMessage({ action: "closeTab" });
     else if (action === 'reopen') chrome.runtime.sendMessage({ action: "reopenTab" });
     
+    // 자동 스크롤 (스마트 판단)
     else if (action === 'autoScroll') {
-        if (window !== window.top) {
-            window.parent.postMessage({ type: 'GESTURE_START_AUTOSCROLL' }, '*');
-        } else {
+        // 내가 메인 창이거나(Top), 아니면 내가 스크롤할 내용이 많은 뚱뚱한 Iframe(네이버블로그)이면 직접 굴러라!
+        if (window === window.top || document.body.scrollHeight > window.innerHeight) {
             startAutoScroll();
+        } else {
+            // 난 쪼그만 광고판이라 스크롤 할 게 없어... 부모님 굴러주세요.
+            window.parent.postMessage({ type: 'GESTURE_START_AUTOSCROLL' }, '*');
         }
     }
+    // 맨위/맨아래 (스마트 판단)
     else if (action === 'top' || action === 'bottom') {
-        if (window !== window.top) {
-            window.parent.postMessage({ type: 'GESTURE_SCROLL', dir: action }, '*');
+        // ★ 핵심 수정: 네이버 블로그 해결사
+        // "내가 메인창인가?" OR "내가 메인창은 아니지만 스크롤할 내용이 화면보다 긴가?"
+        if (window === window.top || document.body.scrollHeight > window.innerHeight) {
+            // 그러면 내가 직접 스크롤한다! (부모한테 안 미룸)
+            executeHybridScroll(action);
         } else {
-            if (action === 'top') window.scrollTo(0, 0);
-            else window.scrollTo(0, document.body.scrollHeight);
+            // 난 내용도 없는 광고 배너다. 부모님이 대신 해주세요.
+            window.parent.postMessage({ type: 'GESTURE_SCROLL', dir: action }, '*');
         }
     }
 }
 
+// --- 메시지 수신 (부모 창) ---
 window.addEventListener('message', (event) => {
     if (!event.data) return;
+    
     if (event.data.type === 'GESTURE_SCROLL') {
-        if (event.data.dir === 'top') window.scrollTo(0, 0);
-        else if (event.data.dir === 'bottom') window.scrollTo(0, document.body.scrollHeight);
+        executeHybridScroll(event.data.dir);
     }
     else if (event.data.type === 'GESTURE_START_AUTOSCROLL') {
         startAutoScroll();
@@ -164,7 +220,7 @@ window.addEventListener('pointerdown', (e) => {
     startX = e.clientX; 
     startY = e.clientY;
     path = [{x: startX, y: startY}]; 
-    prepareDrawing(e);
+    prepareDrawing(e); 
   }
 }, true);
 
@@ -223,10 +279,7 @@ window.addEventListener('pointerup', (e) => {
     const wentDown = downHeight > MIN_HEIGHT_FOR_V; 
     const wentUp = upHeight > MIN_HEIGHT_FOR_V;   
     
-    // ★ 핵심 수정: 제자리 복귀(Returned) 판정 강화
-    // 1. 끝점이 시작점 근처여야 함 (기본 100px)
-    // 2. AND 시작점-끝점 거리가 전체 이동 높이의 80% 미만이어야 함 (즉, 높이만큼은 다시 돌아왔어야 함)
-    // 예: 위로 50px만 긋고 멈추면 distY=50, Height=50. 50 < 40(80%) False -> 탭닫기 아님 (직선)
+    // 제자리 복귀 판정 (직선/V자 구분)
     const distY = Math.abs(endY - startY);
     const returnedY = distY < RETURN_TOLERANCE && distY < (gestureHeight * 0.8);
 
@@ -279,6 +332,7 @@ window.addEventListener('pointerup', (e) => {
                     }
                 } else { 
                     if (absX < absY * STRAIGHT_TOLERANCE) {
+                        // 맨위/맨아래 (스마트 판단 적용됨)
                         if (diffY > 0) action = 'bottom';  
                         else action = 'top';               
                     }
