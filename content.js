@@ -19,11 +19,10 @@ const AUTO_SCROLL_TRIGGER_WIDTH = 50;
 
 // --- [낙서 및 오작동 방지 설정] ---
 const SCROLL_CHAOS_RATIO = 3.0; 
-const V_SHAPE_WIDTH_RATIO = 0.8; 
+const V_SHAPE_WIDTH_RATIO = 1.5; // 각도 유연성 상향 (기존 0.8 -> 1.5)
 const MAX_V_EFFICIENCY_RATIO = 2.6;
 const STRAIGHT_TOLERANCE = 0.6;
 const SIMPLE_MOVE_LINEARITY_LIMIT = 1.25;
-
 
 // --- 캔버스 설정 ---
 function createOverlayCanvas() {
@@ -118,7 +117,7 @@ function stopAutoScroll() {
     if (autoScrollId) cancelAnimationFrame(autoScrollId);
 }
 
-// --- ★ [NEW] 하이브리드 입력 엔진 (Target: document.body) ---
+// --- ★ 하이브리드 입력 엔진 (Target: document.body) ---
 function executeHybridScroll(direction) {
     const keyName = (direction === 'top') ? 'Home' : 'End';
     const keyCodeVal = (direction === 'top') ? 36 : 35; 
@@ -169,23 +168,17 @@ function performAction(action) {
     
     // 자동 스크롤 (스마트 판단)
     else if (action === 'autoScroll') {
-        // 내가 메인 창이거나(Top), 아니면 내가 스크롤할 내용이 많은 뚱뚱한 Iframe(네이버블로그)이면 직접 굴러라!
         if (window === window.top || document.body.scrollHeight > window.innerHeight) {
             startAutoScroll();
         } else {
-            // 난 쪼그만 광고판이라 스크롤 할 게 없어... 부모님 굴러주세요.
             window.parent.postMessage({ type: 'GESTURE_START_AUTOSCROLL' }, '*');
         }
     }
     // 맨위/맨아래 (스마트 판단)
     else if (action === 'top' || action === 'bottom') {
-        // ★ 핵심 수정: 네이버 블로그 해결사
-        // "내가 메인창인가?" OR "내가 메인창은 아니지만 스크롤할 내용이 화면보다 긴가?"
         if (window === window.top || document.body.scrollHeight > window.innerHeight) {
-            // 그러면 내가 직접 스크롤한다! (부모한테 안 미룸)
             executeHybridScroll(action);
         } else {
-            // 난 내용도 없는 광고 배너다. 부모님이 대신 해주세요.
             window.parent.postMessage({ type: 'GESTURE_SCROLL', dir: action }, '*');
         }
     }
@@ -257,6 +250,9 @@ window.addEventListener('pointerup', (e) => {
     let totalTraveledX = 0;  
     let totalTraveledY = 0;
 
+    let yReversals = 0;   // Y축 방향 전환 횟수 (루프 방지)
+    let lastYDir = 0;     // 이전 Y축 이동 방향
+
     for(let i = 0; i < path.length; i++) {
         const p = path[i];
         if (p.y > maxY) maxY = p.y;
@@ -268,6 +264,15 @@ window.addEventListener('pointerup', (e) => {
             totalPathLength += Math.hypot(dx, dy); 
             totalTraveledX += Math.abs(dx);
             totalTraveledY += Math.abs(dy);
+
+            // 3픽셀 이상의 유의미한 움직임에 대해서만 방향 전환 감지
+            if (Math.abs(dy) > 3) {
+                const currentDir = dy > 0 ? 1 : -1;
+                if (lastYDir !== 0 && currentDir !== lastYDir) {
+                    yReversals++;
+                }
+                lastYDir = currentDir;
+            }
         }
     }
 
@@ -275,11 +280,9 @@ window.addEventListener('pointerup', (e) => {
     const downHeight = maxY - startY; 
     const gestureHeight = maxY - minY; 
 
-    // V자 제스처 감도
     const wentDown = downHeight > MIN_HEIGHT_FOR_V; 
     const wentUp = upHeight > MIN_HEIGHT_FOR_V;   
     
-    // 제자리 복귀 판정 (직선/V자 구분)
     const distY = Math.abs(endY - startY);
     const returnedY = distY < RETURN_TOLERANCE && distY < (gestureHeight * 0.8);
 
@@ -293,6 +296,8 @@ window.addEventListener('pointerup', (e) => {
     const isTooWideShape = gestureHeight > 0 ? (totalTraveledX / gestureHeight > V_SHAPE_WIDTH_RATIO) : true;
     const verticalEfficiency = gestureHeight > 20 ? (totalTraveledY / gestureHeight) : 999;
     const isRepetitiveChaos = verticalEfficiency > MAX_V_EFFICIENCY_RATIO;
+    
+    const isCleanV = yReversals <= 2; // 깔끔한 V자(왕복) 판단 조건
 
     let action = null;
 
@@ -302,11 +307,11 @@ window.addEventListener('pointerup', (e) => {
     }
     // 2. [새로고침 (DU)] 
     else if (wentDown && returnedY && isMostlyDown) { 
-        if (!isTooWideShape && !isRepetitiveChaos) action = 'refresh';
+        if (!isTooWideShape && !isRepetitiveChaos && isCleanV) action = 'refresh';
     }
     // 3. [탭 닫기 (UD)] 
     else if (wentUp && returnedY && isMostlyUp) { 
-        if (!isTooWideShape && !isRepetitiveChaos) action = 'close';
+        if (!isTooWideShape && !isRepetitiveChaos && isCleanV) action = 'close';
     }
     // 4. [자동 스크롤 (DR)]
     else if (wentDown && diffX > AUTO_SCROLL_TRIGGER_WIDTH) {
@@ -320,7 +325,6 @@ window.addEventListener('pointerup', (e) => {
         if (directDistance < MIN_LEN_FOR_SCROLL) { /* 너무 짧음 */ }
         else if (isChaosScroll) { console.log("Chaos ignored"); }
         else {
-            // L자 모양 꺾임 방지
             if (linearityRatio > SIMPLE_MOVE_LINEARITY_LIMIT) {
                 console.log("Ignored: Path too curved (L-shape detected)");
             } 
@@ -332,7 +336,6 @@ window.addEventListener('pointerup', (e) => {
                     }
                 } else { 
                     if (absX < absY * STRAIGHT_TOLERANCE) {
-                        // 맨위/맨아래 (스마트 판단 적용됨)
                         if (diffY > 0) action = 'bottom';  
                         else action = 'top';               
                     }
