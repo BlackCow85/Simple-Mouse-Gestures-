@@ -143,7 +143,8 @@ function executeHybridScroll(direction) {
     if (direction === 'top') {
         window.scrollTo(0, 0);
     } else if (direction === 'bottom') {
-        window.scrollTo(0, document.body.scrollHeight);
+        const maxScroll = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
+        window.scrollTo(0, maxScroll);
     }
 
     // 3. [확인사살] 스크롤 이벤트
@@ -301,9 +302,26 @@ window.addEventListener('pointerup', (e) => {
 
     let action = null;
 
-    // 1. [닫힌 탭 열기 (UR)]
+    // 1. [닫힌 탭 열기 (UR)] — L자 형태 검증: 먼저 위로, 그 다음 오른쪽
     if (wentUp && diffX > RECOGNITION_THRESHOLD) {
-        if (!isChaosScroll) action = 'reopen';
+        // 최고점(minY) 인덱스 찾기
+        let peakIdx = 0;
+        for (let i = 1; i < path.length; i++) {
+            if (path[i].y < path[peakIdx].y) peakIdx = i;
+        }
+        // 최고점이 경로의 앞쪽 80% 이내에 있어야 함 (끝까지 대각선이면 탈락)
+        const peakRatio = peakIdx / (path.length - 1);
+        if (peakRatio <= 0.8 && peakIdx >= 2) {
+            // 1구간(시작→최고점): 세로 이동이 가로보다 커야 함
+            const seg1dx = Math.abs(path[peakIdx].x - path[0].x);
+            const seg1dy = Math.abs(path[peakIdx].y - path[0].y);
+            // 2구간(최고점→끝): 가로 이동이 세로보다 커야 함
+            const seg2dx = Math.abs(path[path.length-1].x - path[peakIdx].x);
+            const seg2dy = Math.abs(path[path.length-1].y - path[peakIdx].y);
+            if (seg1dy > seg1dx && seg2dx > seg2dy && !isChaosScroll) {
+                action = 'reopen';
+            }
+        }
     }
     // 2. [새로고침 (DU)] 
     else if (wentDown && returnedY && isMostlyDown) { 
