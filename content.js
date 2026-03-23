@@ -45,13 +45,6 @@ window.addEventListener('DOMContentLoaded', createOverlayCanvas);
 
 // --- 그리기 준비 ---
 function prepareDrawing(e) {
-  if (isAutoScrolling) {
-      stopAutoScroll();
-      if (window !== window.top) {
-          window.parent.postMessage({ type: 'GESTURE_STOP_AUTOSCROLL' }, '*');
-      }
-  }
-
   if (!canvas) createOverlayCanvas();
 
   // 유튜브 전체화면 대응
