@@ -4,18 +4,12 @@ let canvas, ctx;
 let path = []; 
 let isGestureCooldown = false; 
 
-// ★ 자동 스크롤 제어
-let autoScrollId = null;
-let isAutoScrolling = false;
-
 // --- [설정: 민감도] ---
-const MIN_DIST_GLOBAL = 5; 
+const MIN_DIST_GLOBAL = 5;
 const MIN_LEN_FOR_SCROLL = 30;
-const MIN_HEIGHT_FOR_V = 30;   
-const RECOGNITION_THRESHOLD = 80; 
-const RETURN_TOLERANCE = 100; 
-
-const AUTO_SCROLL_TRIGGER_WIDTH = 50;
+const MIN_HEIGHT_FOR_V = 30;
+const RECOGNITION_THRESHOLD = 80;
+const RETURN_TOLERANCE = 100;
 
 // --- [낙서 및 오작동 방지 설정] ---
 const SCROLL_CHAOS_RATIO = 3.0; 
@@ -94,29 +88,6 @@ function stopDrawing(e) {
   }
 }
 
-// --- 자동 스크롤 엔진 ---
-function startAutoScroll() {
-    if (isAutoScrolling) return;
-    isAutoScrolling = true;
-    const speed = 15; 
-    function scrollLoop() {
-        if (!isAutoScrolling) return;
-        window.scrollBy(0, speed);
-        // iframe 내부에서도 바닥 체크
-        if ((window.innerHeight + window.scrollY) >= document.body.offsetHeight) {
-            stopAutoScroll();
-            return;
-        }
-        autoScrollId = requestAnimationFrame(scrollLoop);
-    }
-    scrollLoop();
-}
-
-function stopAutoScroll() {
-    isAutoScrolling = false;
-    if (autoScrollId) cancelAnimationFrame(autoScrollId);
-}
-
 // --- ★ 하이브리드 입력 엔진 (Target: document.body) ---
 function executeHybridScroll(direction) {
     const keyName = (direction === 'top') ? 'Home' : 'End';
@@ -167,14 +138,6 @@ function performAction(action) {
     else if (action === 'close') chrome.runtime.sendMessage({ action: "closeTab" });
     else if (action === 'reopen') chrome.runtime.sendMessage({ action: "reopenTab" });
     
-    // 자동 스크롤 (스마트 판단)
-    else if (action === 'autoScroll') {
-        if (window === window.top || document.body.scrollHeight > window.innerHeight) {
-            startAutoScroll();
-        } else {
-            window.parent.postMessage({ type: 'GESTURE_START_AUTOSCROLL' }, '*');
-        }
-    }
     // 맨위/맨아래 (스마트 판단)
     else if (action === 'top' || action === 'bottom') {
         if (window === window.top || document.body.scrollHeight > window.innerHeight) {
@@ -192,22 +155,9 @@ window.addEventListener('message', (event) => {
     if (event.data.type === 'GESTURE_SCROLL') {
         executeHybridScroll(event.data.dir);
     }
-    else if (event.data.type === 'GESTURE_START_AUTOSCROLL') {
-        startAutoScroll();
-    }
-    else if (event.data.type === 'GESTURE_STOP_AUTOSCROLL') {
-        stopAutoScroll();
-    }
 });
 
 // --- 이벤트 리스너 ---
-window.addEventListener('mousedown', () => {
-    if (isAutoScrolling) {
-        stopAutoScroll();
-        if (window !== window.top) window.parent.postMessage({ type: 'GESTURE_STOP_AUTOSCROLL' }, '*');
-    }
-}, true);
-
 window.addEventListener('pointerdown', (e) => {
   if (e.button === 2) { 
     isDrawing = true; 
@@ -331,11 +281,7 @@ window.addEventListener('pointerup', (e) => {
     else if (wentUp && returnedY && isMostlyUp) { 
         if (!isTooWideShape && !isRepetitiveChaos && isCleanV) action = 'close';
     }
-    // 4. [자동 스크롤 (DR)]
-    else if (wentDown && diffX > AUTO_SCROLL_TRIGGER_WIDTH) {
-        if (!isChaosScroll) action = 'autoScroll';
-    }
-    // 5. [단순 이동 (상하좌우)]
+    // 4. [단순 이동 (상하좌우)]
     else {
         const absX = Math.abs(diffX);
         const absY = Math.abs(diffY);
